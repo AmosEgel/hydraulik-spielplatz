@@ -1,3 +1,166 @@
+const CONSTANTS = {
+    PLOT: {
+        X0: 90,
+        XMAX: 474,
+        Y0: 300,
+        YMIN: 50,
+        TEMP_MIN: -10,
+        TEMP_MAX: 20,
+        VORLAUF_MIN: 20,
+        VORLAUF_MAX: 70
+    },
+    HEIZUNG: {
+        Q_NORM: 1400,
+        B_FAKTOR: 2.5,
+        N_EXPONENT: 1.3
+    },
+    HT: [30, 30, 50, 30] // Heizlast der Räume in W/K
+};
+
+// Helper Functions
+const calculateHeizkoerperLeistung = (mittlereHeizkoerpertemp, raumtemp) => {
+    const uebertemp = mittlereHeizkoerpertemp - raumtemp;
+    const f = uebertemp / 50;
+    return CONSTANTS.HEIZUNG.Q_NORM * 
+           Math.pow(f, CONSTANTS.HEIZUNG.N_EXPONENT) * 
+           CONSTANTS.HEIZUNG.B_FAKTOR;
+};
+
+const calculateVorlauftemperatur = (aussentemp, maxVorlauf) => {
+    let vorlauf = 20 + ((maxVorlauf - 20) * (20 - aussentemp)) / 30;
+    return Math.min(Math.max(vorlauf, CONSTANTS.PLOT.VORLAUF_MIN), 
+                   CONSTANTS.PLOT.VORLAUF_MAX);
+};
+
+const calculateMarkerX = (temp) => {
+    const { X0, XMAX, TEMP_MIN, TEMP_MAX } = CONSTANTS.PLOT;
+    return X0 + ((TEMP_MAX - temp) / (TEMP_MAX - TEMP_MIN)) * (XMAX - X0);
+};
+
+const calculateMarkerY = (vorlauf) => {
+    const { Y0, YMIN, VORLAUF_MIN, VORLAUF_MAX } = CONSTANTS.PLOT;
+    return Y0 - ((vorlauf - VORLAUF_MIN) / (VORLAUF_MAX - VORLAUF_MIN)) * (Y0 - YMIN);
+};
+
+// Main Components
+const plotHeizkurve = () => {
+    const vorlaufMax = parseFloat(document.getElementById('auslegung-vorlauf').value) || 60;
+    const points = [];
+    
+    // Generate curve points
+    for (let t = CONSTANTS.PLOT.TEMP_MAX; t >= CONSTANTS.PLOT.TEMP_MIN; t -= 1) {
+        const vorlauf = calculateVorlauftemperatur(t, vorlaufMax);
+        const x = CONSTANTS.PLOT.X0 + 
+                 ((CONSTANTS.PLOT.TEMP_MAX - t) / 30) * 
+                 (CONSTANTS.PLOT.XMAX - CONSTANTS.PLOT.X0);
+                 
+        if (x > CONSTANTS.PLOT.XMAX) continue;
+        
+        const y = CONSTANTS.PLOT.Y0 - 
+                 ((vorlauf - CONSTANTS.PLOT.VORLAUF_MIN) / 
+                 (CONSTANTS.PLOT.VORLAUF_MAX - CONSTANTS.PLOT.VORLAUF_MIN)) * 
+                 (CONSTANTS.PLOT.Y0 - CONSTANTS.PLOT.YMIN);
+                 
+        points.push(`${x},${y}`);
+    }
+
+    // Update plot elements
+    const polyline = document.getElementById('heizkurve-polyline');
+    if (polyline) {
+        polyline.setAttribute('points', points.join(' '));
+    }
+    
+    updatePlotMarker();
+};
+
+const updatePlotMarker = () => {
+    const marker = document.getElementById('heizkurve-marker');
+    const label = document.getElementById('heizkurve-label');
+    const aussentemp = parseFloat(document.getElementById('aussentemp').value) || 0;
+    const vorlaufMax = parseFloat(document.getElementById('auslegung-vorlauf').value) || 60;
+
+    if (!marker || !label) return;
+
+    const vorlauf = calculateVorlauftemperatur(aussentemp, vorlaufMax);
+    const x = calculateMarkerX(aussentemp);
+    const y = calculateMarkerY(vorlauf);
+
+    marker.setAttribute('cx', x);
+    marker.setAttribute('cy', y);
+    marker.style.display = "block";
+
+    label.setAttribute('x', x - 70);
+    label.setAttribute('y', y - 10);
+    label.textContent = `VL: ${vorlauf.toFixed(1)}°C`;
+    label.style.display = "block";
+};
+
+const updateTabelle = () => {
+    const aussentemp = parseFloat(document.getElementById('aussentemp').value) || 0;
+    const vorlaufMax = parseFloat(document.getElementById('auslegung-vorlauf').value) || 60;
+    const vorlauf = calculateVorlauftemperatur(aussentemp, vorlaufMax);
+    
+    const tabelle = document.querySelector('table');
+    if (tabelle) {
+        const zeilen = tabelle.querySelectorAll('tbody tr');
+
+        // Raumtemperatur in letzter Zeile setzen (Index 7)
+        let raumtemp = [];
+        if (zeilen.length >= 8) {
+            const raumtempRow = zeilen[7];
+            for (let i = 1; i <= 4; i++) {
+                raumtempRow.children[i].textContent = '20.0 °C';
+                raumtemp[i-1] = 20.0;
+            }
+        }
+        
+        // Zeile 2: Vorlauf
+        if (zeilen.length >= 2) {
+            const vorlaufRow = zeilen[1];
+            for (let i = 1; i <= 4; i++) {
+                vorlaufRow.children[i].textContent = vorlauf.toFixed(1) + ' °C';
+            }
+        }
+
+        // Zeile 4: mittlere Heizkörpertemperatur
+        let mittlereTemp = [];
+        if (zeilen.length >= 4) {
+            const tempRow = zeilen[3];
+            for (let i = 1; i <= 4; i++) {
+                tempRow.children[i].textContent = vorlauf.toFixed(1) + ' °C';
+                mittlereTemp[i-1] = vorlauf;
+            }
+        }
+
+        // Zeile 5: Heizleistung (jetzt mit Raumtemp aus Tabelle)
+        if (zeilen.length >= 5) {
+            const leistungRow = zeilen[4];
+            for (let i = 1; i <= 4; i++) {
+                const leistung = calculateHeizkoerperLeistung(mittlereTemp[i-1], raumtemp[i-1]);
+                leistungRow.children[i].textContent = leistung.toFixed(0) + ' W';
+            }
+        }
+
+        // Zeile 6: Transmissionswärmeverlust (HT-Werte)
+        if (zeilen.length >= 6) {
+            const htRow = zeilen[5];
+            for (let i = 1; i <= 4; i++) {
+                htRow.children[i].textContent = CONSTANTS.HT[i-1] + ' W/K';
+            }
+        }
+
+        // Zeile 7: Heizlast Q = HT * (20 - AT)
+        if (zeilen.length >= 7) {
+            const heizlastRow = zeilen[6];
+            for (let i = 1; i <= 4; i++) {
+                const heizlast = CONSTANTS.HT[i-1] * (20 - aussentemp);
+                heizlastRow.children[i].textContent = heizlast.toFixed(0) + ' W';
+            }
+        }
+    }
+};
+
+// Constants
 const app = () => {
     const appContainer = document.getElementById('app');
     appContainer.innerHTML = `
@@ -120,6 +283,20 @@ const app = () => {
                                 <td style="border:1px solid #ccc; padding:4px 8px;"></td>
                             </tr>
                             <tr>
+                                <td style="border:1px solid #ccc; padding:4px 8px;">Vorlauf</td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                            </tr>
+                            <tr>
+                                <td style="border:1px solid #ccc; padding:4px 8px;">Rücklauf</td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                            </tr>
+                            <tr>
                                 <td style="border:1px solid #ccc; padding:4px 8px;">mittlere Heizkörpertemp.</td>
                                 <td style="border:1px solid #ccc; padding:4px 8px;"></td>
                                 <td style="border:1px solid #ccc; padding:4px 8px;"></td>
@@ -161,127 +338,15 @@ const app = () => {
         </div>
     `;
 
-    // Heizkurve plotten (linear zwischen (20,20) und (-10, y))
-        function plotHeizkurve() {
-        const y = parseFloat(document.getElementById('auslegung-vorlauf').value) || 60;
-        // Achsen-Skalierung (20°C links, -10°C rechts, exakt bis -10)
-        const x0 = 90, xMax = 474, y0 = 300, yMin = 50;
-        const tMin = -10, tMax = 20;
-        const vMin = 20, vMax = 70;
-        // Punkte berechnen, Plot endet exakt bei x=-10 (xMax)
-        let points = [];
-        for (let t = tMax; t >= tMin; t -= 1) {
-            // Lineare Interpolation zwischen (20,20) und (-10,y)
-            let vorlauf = 20 + ((y - 20) * (20 - t)) / (20 - (-10));
-            if (vorlauf < vMin) vorlauf = vMin;
-            if (vorlauf > vMax) vorlauf = vMax;
-            // x invertiert: tMax (20°C) -> x0, tMin (-10°C) -> xMax
-            let x = x0 + ((tMax - t) / (tMax - tMin)) * (xMax - x0);
-            // Plot nur bis xMax (x=-10)
-            if (x > xMax) continue;
-            points.push(`${x},${y0 - ((vorlauf - vMin) / (vMax - vMin)) * (y0 - yMin)}`);
-        }
-        // In Polyline eintragen
-        const polyline = document.getElementById('heizkurve-polyline');
-        if (polyline) {
-            polyline.setAttribute('points', points.join(' '));
-        }
-        // Marker und Label für aktuelle Außentemperatur setzen (invertiert)
-        const aussentempInput = document.getElementById('aussentemp');
-        const marker = document.getElementById('heizkurve-marker');
-        const label = document.getElementById('heizkurve-label');
-        if (aussentempInput && marker && label) {
-            const t = parseFloat(aussentempInput.value) || 0;
-            const tClamped = Math.max(tMin, Math.min(tMax, t));
-            let x = x0 + ((tMax - tClamped) / (tMax - tMin)) * (xMax - x0);
-            let vorlauf = 20 + ((y - 20) * (20 - tClamped)) / (20 - (-10));
-            if (vorlauf < vMin) vorlauf = vMin;
-            if (vorlauf > vMax) vorlauf = vMax;
-            let ySvg = y0 - ((vorlauf - vMin) / (vMax - vMin)) * (y0 - yMin);
-            marker.setAttribute('cx', x);
-            marker.setAttribute('cy', ySvg);
-            marker.style.display = "block";
-            // Label anzeigen und positionieren (leicht rechts oberhalb des Punkts)
-            label.setAttribute('x', x - 70);
-            label.setAttribute('y', ySvg - 10);
-            label.textContent = `VL: ${vorlauf.toFixed(1)}°C`;
-            label.style.display = "block";
-        } else if (label) {
-            label.style.display = "none";
-        }
-    }
-
-        // Heizleistung nach Formel Q = Qnorm * f^n * b
-    function HeizkroerperLeistung(mittlereHeizkoerpertemp, raumtemp) {
-        const Qnorm = 1400;
-        const b = 2.5;
-        const n = 1.3;
-        const uebertemp = mittlereHeizkoerpertemp - raumtemp;
-        const f = uebertemp / 50;
-        const Q = Qnorm * Math.pow(f, n) * b;
-        return Q;
-    }
-
-    // Heizlast-Berechnung und Eintrag in Tabelle
-    function updateHeizlastTabelle() {
-        // HT-Werte aus der Tabelle (Zeile 4)
-        const htWerte = [30, 50, 30, 30];
-        // Außentemperatur aus Input
-        const aussentempInput = document.getElementById('aussentemp');
-        const at = aussentempInput ? parseFloat(aussentempInput.value) : 0;
-    // Vorlauftemperatur am markierten Punkt der Heizkurve (abhängig von Außentemperatur)
-    // Heizkurvenformel wie in plotHeizkurve
-    const vorlaufInput = document.getElementById('auslegung-vorlauf');
-    const yMax = vorlaufInput ? parseFloat(vorlaufInput.value) : 60;
-    const t = at;
-    // Heizkurve: linear zwischen (20,20) und (-10, yMax)
-    let vorlauf = 20 + ((yMax - 20) * (20 - t)) / (20 - (-10));
-    // Begrenzung wie im Plot
-    const vMin = 20, vMax = 70;
-    if (vorlauf < vMin) vorlauf = vMin;
-    if (vorlauf > vMax) vorlauf = vMax;
-        // Heizlast Q = HT * (20 - AT)
-        const qWerte = htWerte.map(ht => Math.round(ht * (20 - at)));
-        // Tabelle suchen
-        const tabelle = document.querySelector('table');
-        if (tabelle) {
-            const zeilen = tabelle.querySelectorAll('tbody tr');
-            // Zeile 2: mittlere Heizkörpertemperatur
-            let mittlereTemp = [];
-            if (zeilen.length >= 2) {
-                const tempRow = zeilen[1];
-                for (let i = 1; i <= 4; i++) {
-                    tempRow.children[i].textContent = vorlauf.toFixed(1) + ' °C';
-                    mittlereTemp[i-1] = vorlauf;
-                }
-            }
-            // Zeile 3: Heizleistung
-            if (zeilen.length >= 3) {
-                const leistungRow = zeilen[2];
-                for (let i = 1; i <= 4; i++) {
-                    const leistung = HeizkroerperLeistung(mittlereTemp[i-1], 20);
-                    leistungRow.children[i].textContent = isFinite(leistung) ? leistung.toFixed(0) + ' W' : '';
-                }
-            }
-            // Zeile 5: Heizlast
-            if (zeilen.length >= 5) {
-                const heizlastRow = zeilen[4];
-                for (let i = 1; i <= 4; i++) {
-                    heizlastRow.children[i].textContent = qWerte[i-1] + ' W';
-                }
-            }
-        }
-    }
-
     setTimeout(() => {
         plotHeizkurve();
-    updateHeizlastTabelle();
+        updateTabelle();
         // Event Listener für das Up-Down Feld (Vorlauftemperatur)
         const input = document.getElementById('auslegung-vorlauf');
         if (input) {
             input.addEventListener('input', () => {
                 plotHeizkurve();
-                updateHeizlastTabelle();
+                updateTabelle();
             });
         }
         // Event Listener für Außentemperatur
@@ -289,7 +354,7 @@ const app = () => {
         if (aussentempInput) {
             aussentempInput.addEventListener('input', () => {
                 plotHeizkurve();
-                updateHeizlastTabelle();
+                updateTabelle();
             });
         }
     }, 100);
