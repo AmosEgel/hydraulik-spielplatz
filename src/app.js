@@ -85,16 +85,18 @@ const app = () => {
                     <polyline id="heizkurve-polyline" fill="none" stroke="#0074d9" stroke-width="3"/>
                     <!-- Markierungspunkt für Außentemperatur -->
                     <circle id="heizkurve-marker" r="6" fill="red" stroke="#b00" stroke-width="2" style="display:none"/>
+                    <!-- Textlabel für Vorlauftemperatur am Marker -->
+                    <text id="heizkurve-label" x="0" y="0" font-size="16" fill="#b00" stroke="#fff" stroke-width="0.5" style="display:none;"/>
                 </svg>                
-                <div style="margin-top:1.5em; display:flex; flex-direction:row; align-items:flex-end; gap:2em;">
-                    <div>
-                        <label for="auslegung-vorlauf" style="font-size:1em;">Auslegungs-Vorlauftemperatur</label><br>
-                        <input id="auslegung-vorlauf" type="number" min="20" max="70" step="1" value="60" style="width:70px; font-size:1.2em;">
-                    </div>
-                    <div>
-                        <label for="aussentemp" style="font-size:1em;">Außentemperatur</label><br>
-                        <input id="aussentemp" type="number" min="-10" max="20" step="1" value="0" style="width:70px; font-size:1.2em;">
-                    </div>
+                <!-- VL Up-Down -->
+                <div style="margin-top:1.5em;">
+                    <label for="auslegung-vorlauf" style="font-size:1em;">Auslegungs-Vorlauftemperatur</label><br>
+                    <input id="auslegung-vorlauf" type="number" min="20" max="70" step="1" value="60" style="width:70px; font-size:1.2em;">
+                </div>
+                <!-- Außentemperatur Up-Down -->
+                <div style="margin-top:2em;">
+                    <label for="aussentemp" style="font-size:1em;">Außentemperatur</label><br>
+                    <input id="aussentemp" type="number" min="-10" max="20" step="1" value="0" style="width:70px; font-size:1.2em;">
                 </div>
                 <!-- Tabelle 1: Raumdaten -->
                 <div style="margin-top:1em;">
@@ -133,10 +135,10 @@ const app = () => {
                             </tr>
                             <tr>
                                 <td style="border:1px solid #ccc; padding:4px 8px;">Transmissionswärmeverlust</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">50 W/K</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">70 W/K</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">50 W/K</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">50 W/K</td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
+                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
                             </tr>
                             <tr>
                                 <td style="border:1px solid #ccc; padding:4px 8px;">Heizlast bei 20°C</td>
@@ -184,10 +186,11 @@ const app = () => {
         if (polyline) {
             polyline.setAttribute('points', points.join(' '));
         }
-        // Marker für aktuelle Außentemperatur setzen (invertiert)
+        // Marker und Label für aktuelle Außentemperatur setzen (invertiert)
         const aussentempInput = document.getElementById('aussentemp');
         const marker = document.getElementById('heizkurve-marker');
-        if (aussentempInput && marker) {
+        const label = document.getElementById('heizkurve-label');
+        if (aussentempInput && marker && label) {
             const t = parseFloat(aussentempInput.value) || 0;
             const tClamped = Math.max(tMin, Math.min(tMax, t));
             let x = x0 + ((tMax - tClamped) / (tMax - tMin)) * (xMax - x0);
@@ -198,20 +201,96 @@ const app = () => {
             marker.setAttribute('cx', x);
             marker.setAttribute('cy', ySvg);
             marker.style.display = "block";
+            // Label anzeigen und positionieren (leicht rechts oberhalb des Punkts)
+            label.setAttribute('x', x - 70);
+            label.setAttribute('y', ySvg - 10);
+            label.textContent = `VL: ${vorlauf.toFixed(1)}°C`;
+            label.style.display = "block";
+        } else if (label) {
+            label.style.display = "none";
+        }
+    }
+
+        // Heizleistung nach Formel Q = Qnorm * f^n * b
+    function HeizkroerperLeistung(mittlereHeizkoerpertemp, raumtemp) {
+        const Qnorm = 1400;
+        const b = 2.5;
+        const n = 1.3;
+        const uebertemp = mittlereHeizkoerpertemp - raumtemp;
+        const f = uebertemp / 50;
+        const Q = Qnorm * Math.pow(f, n) * b;
+        return Q;
+    }
+
+    // Heizlast-Berechnung und Eintrag in Tabelle
+    function updateHeizlastTabelle() {
+        // HT-Werte aus der Tabelle (Zeile 4)
+        const htWerte = [30, 50, 30, 30];
+        // Außentemperatur aus Input
+        const aussentempInput = document.getElementById('aussentemp');
+        const at = aussentempInput ? parseFloat(aussentempInput.value) : 0;
+    // Vorlauftemperatur am markierten Punkt der Heizkurve (abhängig von Außentemperatur)
+    // Heizkurvenformel wie in plotHeizkurve
+    const vorlaufInput = document.getElementById('auslegung-vorlauf');
+    const yMax = vorlaufInput ? parseFloat(vorlaufInput.value) : 60;
+    const t = at;
+    // Heizkurve: linear zwischen (20,20) und (-10, yMax)
+    let vorlauf = 20 + ((yMax - 20) * (20 - t)) / (20 - (-10));
+    // Begrenzung wie im Plot
+    const vMin = 20, vMax = 70;
+    if (vorlauf < vMin) vorlauf = vMin;
+    if (vorlauf > vMax) vorlauf = vMax;
+        // Heizlast Q = HT * (20 - AT)
+        const qWerte = htWerte.map(ht => Math.round(ht * (20 - at)));
+        // Tabelle suchen
+        const tabelle = document.querySelector('table');
+        if (tabelle) {
+            const zeilen = tabelle.querySelectorAll('tbody tr');
+            // Zeile 2: mittlere Heizkörpertemperatur
+            let mittlereTemp = [];
+            if (zeilen.length >= 2) {
+                const tempRow = zeilen[1];
+                for (let i = 1; i <= 4; i++) {
+                    tempRow.children[i].textContent = vorlauf.toFixed(1) + ' °C';
+                    mittlereTemp[i-1] = vorlauf;
+                }
+            }
+            // Zeile 3: Heizleistung
+            if (zeilen.length >= 3) {
+                const leistungRow = zeilen[2];
+                for (let i = 1; i <= 4; i++) {
+                    const leistung = HeizkroerperLeistung(mittlereTemp[i-1], 20);
+                    leistungRow.children[i].textContent = isFinite(leistung) ? leistung.toFixed(0) + ' W' : '';
+                }
+            }
+            // Zeile 5: Heizlast
+            if (zeilen.length >= 5) {
+                const heizlastRow = zeilen[4];
+                for (let i = 1; i <= 4; i++) {
+                    heizlastRow.children[i].textContent = qWerte[i-1] + ' W';
+                }
+            }
         }
     }
 
     setTimeout(() => {
         plotHeizkurve();
+    updateHeizlastTabelle();
         // Event Listener für das Up-Down Feld (Vorlauftemperatur)
         const input = document.getElementById('auslegung-vorlauf');
         if (input) {
-            input.addEventListener('input', plotHeizkurve);
+            input.addEventListener('input', () => {
+                plotHeizkurve();
+                updateHeizlastTabelle();
+            });
         }
         // Event Listener für Außentemperatur
         const aussentempInput = document.getElementById('aussentemp');
         if (aussentempInput) {
-            aussentempInput.addEventListener('input', plotHeizkurve);
+            aussentempInput.addEventListener('input', () => {
+                plotHeizkurve();
+                updateHeizlastTabelle();
+            });
         }
     }, 100);
 };
