@@ -15,6 +15,7 @@ const CONSTANTS = {
         Q_NORM: 1400,
         B_FAKTOR: 2.5,
         N_EXPONENT: 1.3,
+        HEAT_CAPACITY: 4200 // spezifische Wärmekapazität von Wasser in J/(kg·K)
     },
     HYDRAULIK: {
         L_LEITUNG: 5, // Länge der Leitungsstücke in Metern
@@ -88,14 +89,54 @@ const calculateHeizlast = (HT, raumtemp, aussentemp) => {
     return HT * (raumtemp - aussentemp);
 };
 
-const calculateRaumtemp = (iRaum, aussentemp) => {
-    const vorlauf = calculateVorlauftemperatur(
-        aussentemp, 
-        parseFloat(document.getElementById('auslegung-vorlauf').value) || 60
-    );
+const calculateHeizkoerperBetrieb = (aussentemp, volumenstroeme, vorlauftemp) => {
+    // volumenstroeme array in m³/s, temperatures in °C
+    const massenstroeme = volumenstroeme.map(v => v * CONSTANTS.HYDRAULIK.RHO); // kg/s
+    const MIN_MASSENSTROM = 1e-6; // Minimaler Massenstrom zur Vermeidung von Division durch 0
     
-    let tMin = 10;  // Minimum plausible room temperature
-    let tMax = 30;  // Maximum plausible room temperature
+    let raumtemp = new Array(4).fill(20);  // Startwerte
+    let ruecklauf = new Array(4).fill(vorlauftemp);  // Startwerte
+    let mitteltemp = new Array(4).fill(vorlauftemp);
+    let heizkoerperLeistung = new Array(4);
+
+    // Iteration für jeden Raum
+    for (let raum = 0; raum < 4; raum++) {
+        // Wenn Massenstrom praktisch 0 ist, setze Rücklauf = Raumtemperatur
+        if (massenstroeme[raum] < MIN_MASSENSTROM) {
+            ruecklauf[raum] = raumtemp;
+            mitteltemp[raum] = (vorlauftemp + ruecklauf[raum]) / 2;
+            heizkoerperLeistung[raum] = 0;
+            raumtemp[raum] = calculateRaumtemp(raum, mitteltemp[raum], aussentemp);
+            continue;
+        }
+
+        // Iterative Berechnung für jeden Raum
+        for (let i = 0; i < 10; i++) {
+            mitteltemp[raum] = (vorlauftemp + ruecklauf[raum]) / 2;
+            heizkoerperLeistung[raum] = calculateHeizkoerperLeistung(mitteltemp[raum] - raumtemp[raum]);
+            raumtemp[raum] = calculateRaumtemp(raum, mitteltemp[raum], aussentemp);            
+            ruecklauf[raum] = vorlauftemp - heizkoerperLeistung[raum] / 
+                (massenstroeme[raum] * CONSTANTS.HEIZUNG.HEAT_CAPACITY);
+        }
+    }
+    
+    return {
+        raumtemp,
+        ruecklauf,
+        mitteltemp,
+        heizkoerperLeistung
+    };
+};
+
+const calculateRaumtemp = (iRaum, heizkoerperMitteltemp, aussentemp) => {
+    // Bei sehr kleiner oder keiner Heizleistung wird die Raumtemperatur
+    // sich der Außentemperatur annähern
+    if (heizkoerperMitteltemp <= aussentemp) {
+        return aussentemp;
+    }
+
+    let tMin = aussentemp;  // Minimum kann nicht unter Außentemp fallen
+    let tMax = heizkoerperMitteltemp;  // Maximum ist die mittlere HK-Temp
     const epsilon = 0.01;  // Desired precision in °C
     
     // Iterate until we reach desired precision
@@ -103,7 +144,7 @@ const calculateRaumtemp = (iRaum, aussentemp) => {
         const tMid = (tMin + tMax) / 2;
         
         // Calculate heating power at current temperature
-        const heizleistung = calculateHeizkoerperLeistung(vorlauf - tMid);
+        const heizleistung = calculateHeizkoerperLeistung(heizkoerperMitteltemp - tMid);
         
         // Calculate heat loss at current temperature
         const heizlast = calculateHeizlast(CONSTANTS.HT[iRaum], tMid, aussentemp);
@@ -192,27 +233,16 @@ const updateTabelle = () => {
     const aussentemp = parseFloat(document.getElementById('aussentemp').value) || 0;
     const vorlaufMax = parseFloat(document.getElementById('auslegung-vorlauf').value) || 60;
     const vorlauf = calculateVorlauftemperatur(aussentemp, vorlaufMax);
-    
+    const volumenstroeme = calculateVolumenstroeme();
+    const { raumtemp, ruecklauf, mitteltemp, heizkoerperLeistung } = calculateHeizkoerperBetrieb(aussentemp, volumenstroeme, vorlauf);
+            
     const tabelle = document.querySelector('table');
     if (tabelle) {
         const zeilen = tabelle.querySelectorAll('tbody tr');
 
-        // Raumtemperatur in letzter Zeile berechnen und setzen (Index 7)
-        let raumtemp = [];
-        if (zeilen.length >= 8) {
-            const raumtempRow = zeilen[7];
-            for (let i = 1; i <= 4; i++) {
-                // Berechne Raumtemperatur für jeden Raum (i-1 wegen 0-basiertem Array)
-                const temp = calculateRaumtemp(i-1, aussentemp);
-                raumtempRow.children[i].textContent = temp.toFixed(1) + ' °C';
-                raumtemp[i-1] = temp;
-            }
-        }
-
         // Zeile 1: Volumenstrom
         if (zeilen.length >= 1) {
             const volumenstromRow = zeilen[0];
-            const volumenstroeme = calculateVolumenstroeme();
             for (let i = 1; i <= 4; i++) {
                 volumenstromRow.children[i].textContent = (volumenstroeme[i-1] * 3600 * 1000).toFixed(1) + ' l/h';
             }
@@ -226,13 +256,19 @@ const updateTabelle = () => {
             }
         }
 
+        // Zeile 3: Rücklauf
+        if (zeilen.length >= 3) {
+            const ruecklaufRow = zeilen[2];
+            for (let i = 1; i <= 4; i++) {
+                ruecklaufRow.children[i].textContent = ruecklauf[i-1].toFixed(1) + ' °C';
+            }
+        }
+
         // Zeile 4: mittlere Heizkörpertemperatur
-        let mittlereTemp = [];
         if (zeilen.length >= 4) {
             const tempRow = zeilen[3];
             for (let i = 1; i <= 4; i++) {
-                tempRow.children[i].textContent = vorlauf.toFixed(1) + ' °C';
-                mittlereTemp[i-1] = vorlauf;
+                tempRow.children[i].textContent = mitteltemp[i-1].toFixed(1) + ' °C';
             }
         }
 
@@ -240,8 +276,7 @@ const updateTabelle = () => {
         if (zeilen.length >= 5) {
             const leistungRow = zeilen[4];
             for (let i = 1; i <= 4; i++) {
-                const leistung = calculateHeizkoerperLeistung(mittlereTemp[i-1] - raumtemp[i-1]);
-                leistungRow.children[i].textContent = leistung.toFixed(0) + ' W';
+                leistungRow.children[i].textContent = heizkoerperLeistung[i-1].toFixed(0) + ' W';
             }
         }
 
@@ -259,6 +294,14 @@ const updateTabelle = () => {
             for (let i = 1; i <= 4; i++) {
                 const heizlast = CONSTANTS.HT[i-1] * (20 - aussentemp);
                 heizlastRow.children[i].textContent = heizlast.toFixed(0) + ' W';
+            }
+        }
+
+        // Zeile 8: Raumtemperatur
+        if (zeilen.length >= 8) {
+            const raumtempRow = zeilen[7];
+            for (let i = 1; i <= 4; i++) {
+                raumtempRow.children[i].textContent = raumtemp[i-1].toFixed(1) + ' °C';
             }
         }
     }
