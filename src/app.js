@@ -1,3 +1,5 @@
+import { appTemplate } from './template.js';
+
 const CONSTANTS = {
     PLOT: {
         X0: 90,
@@ -12,18 +14,109 @@ const CONSTANTS = {
     HEIZUNG: {
         Q_NORM: 1400,
         B_FAKTOR: 2.5,
-        N_EXPONENT: 1.3
+        N_EXPONENT: 1.3,
+    },
+    HYDRAULIK: {
+        L_LEITUNG: 5, // Länge der Leitungsstücke in Metern
+        ETA: 1e-3, // Viskosität Wasser in Pa s
+        RHO: 1000, // Dichte Wasser in kg/m³
+        KV: [0.055, 0.141, 0.221, 0.247, 0.28, 0.325], // Kv-Werte der Ventile je Einstellung, m³/h bei 1 bar       
+        D_ROHR: 0.015, // Rohrdurchmesser in Metern
+        PUMPENDRUCK: 30000 // Pumpendruck in Pascal (0.3 bar)
     },
     HT: [30, 30, 50, 30] // Heizlast der Räume in W/K
 };
 
 // Helper Functions
-const calculateHeizkoerperLeistung = (mittlereHeizkoerpertemp, raumtemp) => {
-    const uebertemp = mittlereHeizkoerpertemp - raumtemp;
+const calculateDruckverlustLeitung = (volumenstrom) => {
+    // volumenstrom in m³/s
+    const r = CONSTANTS.HYDRAULIK.D_ROHR / 2; // Radius in Metern
+    const geschwindigkeit = volumenstrom / (Math.PI * Math.pow(r, 2)); // m/s
+    const kinematischeViskositaet = CONSTANTS.HYDRAULIK.ETA / CONSTANTS.HYDRAULIK.RHO; // in m²/s
+    const reynoldsZahl = (geschwindigkeit * CONSTANTS.HYDRAULIK.D_ROHR) / kinematischeViskositaet;
+    // Using Blasius equation for turbulent flow (Re > 4000)
+    const lambda = 0.3164 * Math.pow(kinematischeViskositaet / (geschwindigkeit * CONSTANTS.HYDRAULIK.D_ROHR), 0.25);
+    const druckverlust = (lambda * CONSTANTS.HYDRAULIK.L_LEITUNG * CONSTANTS.HYDRAULIK.RHO * Math.pow(geschwindigkeit, 2)) / (2 * r);
+    return druckverlust; // in Pascal
+}
+
+const calculateDruckverlustVentil = (volumenstrom, kv) => {
+    // volumenstrom in m³/s, kv in m³/h bei 1 bar
+    const volumenstrom_m3h = volumenstrom * 3600; // Convert m³/s to m³/h
+    const deltaP = Math.pow(volumenstrom_m3h / kv, 2); // in bar
+    return deltaP * 100000; // in Pascal
+}
+
+const calculateDruckverlust = (volumenstroeme, kvs) => {
+    // volumenstroeme in m³/s
+    // kvs in m³/h bei 1 bar
+    const Vdot1 = volumenstroeme[0];
+    const Vdot2 = volumenstroeme[1];
+    const Vdot3 = volumenstroeme[2];
+    const Vdot4 = volumenstroeme[3];
+    const Vdot12 = volumenstroeme[0] + volumenstroeme[1];
+    const Vdot34 = volumenstroeme[2] + volumenstroeme[3];
+    const Vdot1234 = volumenstroeme[0] + volumenstroeme[1] + volumenstroeme[2] + volumenstroeme[3];
+    
+    const dpL2 = calculateDruckverlustLeitung(Vdot2);
+    const dpL4 = calculateDruckverlustLeitung(Vdot4);
+    const dpL12 = calculateDruckverlustLeitung(Vdot12);
+    const dpL34 = calculateDruckverlustLeitung(Vdot34);
+    const dpL1234 = calculateDruckverlustLeitung(Vdot1234);
+    
+    const dpV1 = calculateDruckverlustVentil(Vdot1, kvs[0]);
+    const dpV2 = calculateDruckverlustVentil(Vdot2, kvs[1]);
+    const dpV3 = calculateDruckverlustVentil(Vdot3, kvs[2]);
+    const dpV4 = calculateDruckverlustVentil(Vdot4, kvs[3]);
+
+    const dp1 = 2 * (dpL1234 + dpL12) + dpV1;
+    const dp2 = 2 * (dpL1234 + dpL12 + dpL2) + dpV2;
+    const dp3 = 2 * (dpL1234 + dpL34) + dpV3;
+    const dp4 = 2 * (dpL1234 + dpL34 + dpL4) + dpV4;   
+
+    return {dp1, dp2, dp3, dp4};
+}
+
+const calculateHeizkoerperLeistung = (uebertemp) => {
     const f = uebertemp / 50;
     return CONSTANTS.HEIZUNG.Q_NORM * 
            Math.pow(f, CONSTANTS.HEIZUNG.N_EXPONENT) * 
            CONSTANTS.HEIZUNG.B_FAKTOR;
+};
+
+const calculateHeizlast = (HT, raumtemp, aussentemp) => {
+    return HT * (raumtemp - aussentemp);
+};
+
+const calculateRaumtemp = (iRaum, aussentemp) => {
+    const vorlauf = calculateVorlauftemperatur(
+        aussentemp, 
+        parseFloat(document.getElementById('auslegung-vorlauf').value) || 60
+    );
+    
+    let tMin = 10;  // Minimum plausible room temperature
+    let tMax = 30;  // Maximum plausible room temperature
+    const epsilon = 0.01;  // Desired precision in °C
+    
+    // Iterate until we reach desired precision
+    while (tMax - tMin > epsilon) {
+        const tMid = (tMin + tMax) / 2;
+        
+        // Calculate heating power at current temperature
+        const heizleistung = calculateHeizkoerperLeistung(vorlauf - tMid);
+        
+        // Calculate heat loss at current temperature
+        const heizlast = calculateHeizlast(CONSTANTS.HT[iRaum], tMid, aussentemp);
+        
+        // Adjust interval based on difference
+        if (heizleistung > heizlast) {
+            tMin = tMid;  // Room can get warmer
+        } else {
+            tMax = tMid;  // Room must get cooler
+        }
+    }
+    
+    return (tMin + tMax) / 2;
 };
 
 const calculateVorlauftemperatur = (aussentemp, maxVorlauf) => {
@@ -104,16 +197,27 @@ const updateTabelle = () => {
     if (tabelle) {
         const zeilen = tabelle.querySelectorAll('tbody tr');
 
-        // Raumtemperatur in letzter Zeile setzen (Index 7)
+        // Raumtemperatur in letzter Zeile berechnen und setzen (Index 7)
         let raumtemp = [];
         if (zeilen.length >= 8) {
             const raumtempRow = zeilen[7];
             for (let i = 1; i <= 4; i++) {
-                raumtempRow.children[i].textContent = '20.0 °C';
-                raumtemp[i-1] = 20.0;
+                // Berechne Raumtemperatur für jeden Raum (i-1 wegen 0-basiertem Array)
+                const temp = calculateRaumtemp(i-1, aussentemp);
+                raumtempRow.children[i].textContent = temp.toFixed(1) + ' °C';
+                raumtemp[i-1] = temp;
             }
         }
-        
+
+        // Zeile 1: Volumenstrom
+        if (zeilen.length >= 1) {
+            const volumenstromRow = zeilen[0];
+            const volumenstroeme = calculateVolumenstroeme();
+            for (let i = 1; i <= 4; i++) {
+                volumenstromRow.children[i].textContent = (volumenstroeme[i-1] * 3600 * 1000).toFixed(1) + ' l/h';
+            }
+        }
+
         // Zeile 2: Vorlauf
         if (zeilen.length >= 2) {
             const vorlaufRow = zeilen[1];
@@ -132,11 +236,11 @@ const updateTabelle = () => {
             }
         }
 
-        // Zeile 5: Heizleistung (jetzt mit Raumtemp aus Tabelle)
+        // Zeile 5: Heizleistung
         if (zeilen.length >= 5) {
             const leistungRow = zeilen[4];
             for (let i = 1; i <= 4; i++) {
-                const leistung = calculateHeizkoerperLeistung(mittlereTemp[i-1], raumtemp[i-1]);
+                const leistung = calculateHeizkoerperLeistung(mittlereTemp[i-1] - raumtemp[i-1]);
                 leistungRow.children[i].textContent = leistung.toFixed(0) + ' W';
             }
         }
@@ -160,183 +264,97 @@ const updateTabelle = () => {
     }
 };
 
+const calculateVolumenstroeme = () => {
+    // Get current valve settings
+    const kv1 = CONSTANTS.HYDRAULIK.KV[parseInt(document.getElementById('ogl').value) - 1];
+    const kv2 = CONSTANTS.HYDRAULIK.KV[parseInt(document.getElementById('ogr').value) - 1];
+    const kv3 = CONSTANTS.HYDRAULIK.KV[parseInt(document.getElementById('egl').value) - 1];
+    const kv4 = CONSTANTS.HYDRAULIK.KV[parseInt(document.getElementById('egr').value) - 1];
+    const kvs = [kv1, kv2, kv3, kv4];
+
+    // Initial guess: equal flow rates
+    let v = [0.1 / 3600, 0.1 / 3600, 0.1 / 3600, 0.1 / 3600]; // m³/s
+    const epsilon = 1e-6;
+    const maxIter = 100;
+    let iter = 0;
+
+    while (iter < maxIter) {
+        const dp = calculateDruckverlust(v, kvs);
+        
+        // Check if we're close enough to the pump pressure
+        const errors = [
+            dp.dp1 - CONSTANTS.HYDRAULIK.PUMPENDRUCK,
+            dp.dp2 - CONSTANTS.HYDRAULIK.PUMPENDRUCK,
+            dp.dp3 - CONSTANTS.HYDRAULIK.PUMPENDRUCK,
+            dp.dp4 - CONSTANTS.HYDRAULIK.PUMPENDRUCK
+        ];
+        
+        if (Math.max(...errors.map(Math.abs)) < epsilon) {
+            break;
+        }
+
+        // Calculate numerical Jacobian
+        const h = 1e-6;
+        const J = [];
+        for (let i = 0; i < 4; i++) {
+            J[i] = [];
+            for (let j = 0; j < 4; j++) {
+                const vPlus = [...v];
+                vPlus[j] += h;
+                const dpPlus = calculateDruckverlust(vPlus, kvs);
+                const dpValues = [dpPlus.dp1, dpPlus.dp2, dpPlus.dp3, dpPlus.dp4];
+                J[i][j] = (dpValues[i] - [dp.dp1, dp.dp2, dp.dp3, dp.dp4][i]) / h;
+            }
+        }
+
+        // Solve J * dv = -F using simple Gaussian elimination
+        const dv = solveLinearSystem(J, errors.map(e => -e));
+
+        // Update with damping
+        const alpha = 0.5;
+        for (let i = 0; i < 4; i++) {
+            v[i] += alpha * dv[i];
+            if (v[i] < 0) v[i] = 0.01; // Prevent negative flow rates
+        }
+
+        iter++;
+    }
+
+    return v;
+};
+
+// Helper function for solving linear system
+const solveLinearSystem = (A, b) => {
+    const n = A.length;
+    const x = new Array(n).fill(0);
+    
+    // Simple Gaussian elimination
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            const factor = A[j][i] / A[i][i];
+            for (let k = i; k < n; k++) {
+                A[j][k] -= factor * A[i][k];
+            }
+            b[j] -= factor * b[i];
+        }
+    }
+    
+    // Back substitution
+    for (let i = n - 1; i >= 0; i--) {
+        let sum = b[i];
+        for (let j = i + 1; j < n; j++) {
+            sum -= A[i][j] * x[j];
+        }
+        x[i] = sum / A[i][i];
+    }
+    
+    return x;
+};
+
 // Constants
 const app = () => {
     const appContainer = document.getElementById('app');
-    appContainer.innerHTML = `
-        <h1>Hydraulik-Spielplatz</h1>
-        <div style="display:flex; flex-direction:row; align-items:flex-start;">
-            <!-- SVG und Eingabefelder -->
-            <div style="position:relative; width:1200px; height:840px; margin-bottom:2em;">
-                <object type="image/svg+xml" data="schematic.svg" width="1200" height="840" style="display:block;"></object>
-                <!-- Raum-Labels oben rechts in jedem Raum -->
-                <div style="position:absolute; left:350px; top:210px; width:120px; text-align:right; font-weight:bold; color:#333; pointer-events:none;">
-                    Raum 1 HT=50W/K T=20°C
-                </div>
-                <div style="position:absolute; left:750px; top:210px; width:120px; text-align:right; font-weight:bold; color:#333; pointer-events:none;">
-                    Raum 2 HT=50W/K T=20°C
-                </div>
-                <div style="position:absolute; left:350px; top:410px; width:120px; text-align:right; font-weight:bold; color:#333; pointer-events:none;">
-                    Raum 3 HT=70W/K T=20°C
-                </div>
-                <div style="position:absolute; left:750px; top:410px; width:120px; text-align:right; font-weight:bold; color:#333; pointer-events:none;">
-                    Raum 4 HT=50W/K T=20°C
-                </div>
-                <!-- OG links Heizkörper -->
-                <div style="position:absolute; left:220px; top:270px; width:160px; height:60px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;">
-                    <label for="ogl" style="font-size:0.95em;">Ventil-Voreinstellung</label>
-                    <input id="ogl" type="number" min="1" max="6" step="1" value="3" style="width:60px; font-size:1.2em;">
-                </div>
-                <!-- OG rechts Heizkörper -->
-                <div style="position:absolute; left:620px; top:270px; width:160px; height:60px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;">
-                    <label for="ogr" style="font-size:0.95em;">Ventil-Voreinstellung</label>
-                    <input id="ogr" type="number" min="1" max="6" step="1" value="3" style="width:60px; font-size:1.2em;">
-                </div>
-                <!-- EG links Heizkörper -->
-                <div style="position:absolute; left:220px; top:470px; width:160px; height:60px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;">
-                    <label for="egl" style="font-size:0.95em;">Ventil-Voreinstellung</label>
-                    <input id="egl" type="number" min="1" max="6" step="1" value="3" style="width:60px; font-size:1.2em;">
-                </div>
-                <!-- EG rechts Heizkörper -->
-                <div style="position:absolute; left:620px; top:470px; width:160px; height:60px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;">
-                    <label for="egr" style="font-size:0.95em;">Ventil-Voreinstellung</label>
-                    <input id="egr" type="number" min="1" max="6" step="1" value="3" style="width:60px; font-size:1.2em;">
-                </div>
-            </div>
-            <!-- Heizkurven-Plot und Tabelle -->
-            <div style="margin-left:40px; min-width:440px;">
-                <svg id="heizkurve-plot" width="600" height="350" style="background:#fff;">
-                    <!-- Rahmen (Box-Plot) -->
-                    <rect x="89" y="49" width="384" height="252" fill="none" stroke="#888" stroke-width="2"/>
-                    <!-- Vertikale Gridlines für x-Achse -->
-                    <line x1="90" y1="50" x2="90" y2="300" stroke="#eee" stroke-width="1"/>
-                    <line x1="154" y1="50" x2="154" y2="300" stroke="#eee" stroke-width="1"/>
-                    <line x1="218" y1="50" x2="218" y2="300" stroke="#eee" stroke-width="1"/>
-                    <line x1="282" y1="50" x2="282" y2="300" stroke="#eee" stroke-width="1"/>
-                    <line x1="346" y1="50" x2="346" y2="300" stroke="#eee" stroke-width="1"/>
-                    <line x1="410" y1="50" x2="410" y2="300" stroke="#eee" stroke-width="1"/>
-                    <line x1="474" y1="50" x2="474" y2="300" stroke="#eee" stroke-width="1"/>
-                    <!-- Horizontale Gridlines für y-Achse -->
-                    <line x1="90" y1="300" x2="474" y2="300" stroke="#eee" stroke-width="1"/>
-                    <line x1="90" y1="250" x2="474" y2="250" stroke="#eee" stroke-width="1"/>
-                    <line x1="90" y1="200" x2="474" y2="200" stroke="#eee" stroke-width="1"/>
-                    <line x1="90" y1="150" x2="474" y2="150" stroke="#eee" stroke-width="1"/>
-                    <line x1="90" y1="100" x2="474" y2="100" stroke="#eee" stroke-width="1"/>
-                    <line x1="90" y1="50" x2="474" y2="50" stroke="#eee" stroke-width="1"/>
-                    <!-- Achsen -->
-                    <line x1="90" y1="300" x2="474" y2="300" stroke="#333" stroke-width="2"/>
-                    <line x1="90" y1="300" x2="90" y2="50" stroke="#333" stroke-width="2"/>
-                    <!-- Achsen-Beschriftung -->
-                    <text x="282" y="340" font-size="16" text-anchor="middle">Außentemperatur [°C]</text>
-                    <text x="30" y="180" font-size="16" text-anchor="middle" transform="rotate(-90 30,180)">Vorlauftemperatur [°C]</text>
-                    <!-- x-Achse Werte: gleichmäßig von 20 (links) bis -10 (rechts) -->
-                    <text x="90" y="320" font-size="12" text-anchor="middle">20</text>
-                    <text x="154" y="320" font-size="12" text-anchor="middle">15</text>
-                    <text x="218" y="320" font-size="12" text-anchor="middle">10</text>
-                    <text x="282" y="320" font-size="12" text-anchor="middle">5</text>
-                    <text x="346" y="320" font-size="12" text-anchor="middle">0</text>
-                    <text x="410" y="320" font-size="12" text-anchor="middle">-5</text>
-                    <text x="474" y="320" font-size="12" text-anchor="middle">-10</text>
-                    <!-- y-Achse Werte -->
-                    <text x="75" y="300" font-size="12" text-anchor="end">20</text>
-                    <text x="75" y="250" font-size="12" text-anchor="end">30</text>
-                    <text x="75" y="200" font-size="12" text-anchor="end">40</text>
-                    <text x="75" y="150" font-size="12" text-anchor="end">50</text>
-                    <text x="75" y="100" font-size="12" text-anchor="end">60</text>
-                    <text x="75" y="50" font-size="12" text-anchor="end">70</text>
-                    <!-- Heizkurve (wird per JS gesetzt) -->
-                    <polyline id="heizkurve-polyline" fill="none" stroke="#0074d9" stroke-width="3"/>
-                    <!-- Markierungspunkt für Außentemperatur -->
-                    <circle id="heizkurve-marker" r="6" fill="red" stroke="#b00" stroke-width="2" style="display:none"/>
-                    <!-- Textlabel für Vorlauftemperatur am Marker -->
-                    <text id="heizkurve-label" x="0" y="0" font-size="16" fill="#b00" stroke="#fff" stroke-width="0.5" style="display:none;"/>
-                </svg>                
-                <!-- VL Up-Down -->
-                <div style="margin-top:1.5em;">
-                    <label for="auslegung-vorlauf" style="font-size:1em;">Auslegungs-Vorlauftemperatur</label><br>
-                    <input id="auslegung-vorlauf" type="number" min="20" max="70" step="1" value="60" style="width:70px; font-size:1.2em;">
-                </div>
-                <!-- Außentemperatur Up-Down -->
-                <div style="margin-top:2em;">
-                    <label for="aussentemp" style="font-size:1em;">Außentemperatur</label><br>
-                    <input id="aussentemp" type="number" min="-10" max="20" step="1" value="0" style="width:70px; font-size:1.2em;">
-                </div>
-                <!-- Tabelle 1: Raumdaten -->
-                <div style="margin-top:1em;">
-                    <h3>Tabelle 1: Raumdaten</h3>
-                    <table style="border-collapse:collapse; min-width:400px; text-align:center;">
-                        <thead>
-                            <tr>
-                                <th style="border:1px solid #ccc; padding:4px 8px;"></th>
-                                <th style="border:1px solid #ccc; padding:4px 8px;">Raum 1</th>
-                                <th style="border:1px solid #ccc; padding:4px 8px;">Raum 2</th>
-                                <th style="border:1px solid #ccc; padding:4px 8px;">Raum 3</th>
-                                <th style="border:1px solid #ccc; padding:4px 8px;">Raum 4</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">Volumenstrom</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                            </tr>
-                            <tr>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">Vorlauf</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                            </tr>
-                            <tr>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">Rücklauf</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                            </tr>
-                            <tr>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">mittlere Heizkörpertemp.</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                            </tr>
-                            <tr>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">Heizleistung</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                            </tr>
-                            <tr>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">Transmissionswärmeverlust</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                            </tr>
-                            <tr>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">Heizlast bei 20°C</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                            </tr>
-                            <tr>
-                                <td style="border:1px solid #ccc; padding:4px 8px;">Raumtemperatur</td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                                <td style="border:1px solid #ccc; padding:4px 8px;"></td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    `;
+    appContainer.innerHTML = appTemplate;
 
     setTimeout(() => {
         plotHeizkurve();
@@ -357,6 +375,16 @@ const app = () => {
                 updateTabelle();
             });
         }
+        // Add event listeners for valve settings
+        const valveInputs = ['ogl', 'ogr', 'egl', 'egr'];
+        valveInputs.forEach(id => {
+            const input = document.getElementById(id);
+            if (input) {
+                input.addEventListener('input', () => {
+                    updateTabelle();
+                });
+            }
+        });
     }, 100);
 };
 
