@@ -21,11 +21,47 @@ const CONSTANTS = {
         L_LEITUNG: 5, // Länge der Leitungsstücke in Metern
         ETA: 1e-3, // Viskosität Wasser in Pa s
         RHO: 1000, // Dichte Wasser in kg/m³
-        KV: [0.055, 0.141, 0.221, 0.247, 0.28, 0.325], // Kv-Werte der Ventile je Einstellung, m³/h bei 1 bar       
+        KV: [0.05, 0.09, 0.13, 0.17, 0.22, 0.28, 0.36, 0.45, 0.51], // Kv-Werte der Ventile je Einstellung, m³/h bei 1 bar. Quelle: Oventrop Baureihe AV9, 1,5K P-Abweichung
         D_ROHR: 0.015, // Rohrdurchmesser in Metern
-        PUMPENDRUCK: 30000 // Pumpendruck in Pascal (0.3 bar)
+        PUMPENDRUCK: 50000 // Pumpendruck in Pascal (0.5 bar)
     },
-    HT: [30, 30, 50, 30] // Heizlast der Räume in W/K
+    HT: [40, 40, 30, 30] // Heizlast der Räume in W/K
+};
+
+// Debug Functions
+const debug = {
+    enabled: false,
+    window: null,
+    
+    init() {
+        this.window = document.getElementById('debug-window');
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'F12') {
+                e.preventDefault();
+                this.toggle();
+            }
+        });
+    },
+    
+    toggle() {
+        this.enabled = !this.enabled;
+        if (this.window) {
+            this.window.style.display = this.enabled ? 'block' : 'none';
+        }
+    },
+    
+    log(msg) {
+        if (!this.enabled || !this.window) return;
+        const time = new Date().toLocaleTimeString();
+        this.window.innerHTML += `[${time}] ${msg}<br>`;
+        this.window.scrollTop = this.window.scrollHeight;
+    },
+    
+    clear() {
+        if (this.window) {
+            this.window.innerHTML = '';
+        }
+    }
 };
 
 // Helper Functions
@@ -90,19 +126,19 @@ const calculateHeizlast = (HT, raumtemp, aussentemp) => {
 };
 
 const calculateHeizkoerperBetrieb = (aussentemp, volumenstroeme, vorlauftemp) => {
-    // volumenstroeme array in m³/s, temperatures in °C
-    const massenstroeme = volumenstroeme.map(v => v * CONSTANTS.HYDRAULIK.RHO); // kg/s
-    const MIN_MASSENSTROM = 1e-6; // Minimaler Massenstrom zur Vermeidung von Division durch 0
+    debug.log('Starting heater calculations...');
+    const massenstroeme = volumenstroeme.map(v => v * CONSTANTS.HYDRAULIK.RHO);
+    const MIN_MASSENSTROM = 1e-6;
     
-    let raumtemp = new Array(4).fill(20);  // Startwerte
-    let ruecklauf = new Array(4).fill(vorlauftemp);  // Startwerte
-    let mitteltemp = new Array(4).fill(vorlauftemp);
+    let raumtemp = new Array(4).fill(20);
+    let ruecklauf = new Array(4).fill(vorlauftemp - 5);
+    let mitteltemp = new Array(4).fill(vorlauftemp - 2.5);
     let heizkoerperLeistung = new Array(4);
 
-    // Iteration für jeden Raum
     for (let raum = 0; raum < 4; raum++) {
-        // Wenn Massenstrom praktisch 0 ist, setze Rücklauf = Raumtemperatur
+        debug.log(`\nCalculating room ${raum + 1}:`);
         if (massenstroeme[raum] < MIN_MASSENSTROM) {
+            debug.log(`Room ${raum + 1}: Mass flow too low, skipping iterations`);
             ruecklauf[raum] = raumtemp;
             mitteltemp[raum] = (vorlauftemp + ruecklauf[raum]) / 2;
             heizkoerperLeistung[raum] = 0;
@@ -110,22 +146,20 @@ const calculateHeizkoerperBetrieb = (aussentemp, volumenstroeme, vorlauftemp) =>
             continue;
         }
 
-        // Iterative Berechnung für jeden Raum
         for (let i = 0; i < 10; i++) {
             mitteltemp[raum] = (vorlauftemp + ruecklauf[raum]) / 2;
+            raumtemp[raum] = calculateRaumtemp(raum, mitteltemp[raum], aussentemp);
             heizkoerperLeistung[raum] = calculateHeizkoerperLeistung(mitteltemp[raum] - raumtemp[raum]);
-            raumtemp[raum] = calculateRaumtemp(raum, mitteltemp[raum], aussentemp);            
-            ruecklauf[raum] = vorlauftemp - heizkoerperLeistung[raum] / 
-                (massenstroeme[raum] * CONSTANTS.HEIZUNG.HEAT_CAPACITY);
+            ruecklauf[raum] = vorlauftemp - heizkoerperLeistung[raum] / (massenstroeme[raum] * CONSTANTS.HEIZUNG.HEAT_CAPACITY);
+            
+            debug.log(`Iteration ${i + 1}: T_room=${raumtemp[raum].toFixed(2)}°C, ` +
+                     `T_return=${ruecklauf[raum].toFixed(2)}°C, ` +
+                     `Power=${heizkoerperLeistung[raum].toFixed(0)}W`);
         }
     }
     
-    return {
-        raumtemp,
-        ruecklauf,
-        mitteltemp,
-        heizkoerperLeistung
-    };
+    debug.log('Heater calculations completed');
+    return { raumtemp, ruecklauf, mitteltemp, heizkoerperLeistung };
 };
 
 const calculateRaumtemp = (iRaum, heizkoerperMitteltemp, aussentemp) => {
@@ -308,6 +342,11 @@ const updateTabelle = () => {
 };
 
 const calculateVolumenstroeme = () => {
+    debug.log('Calculating flow rates...');
+    // Get current pump pressure from input
+    const pumpendruckBar = parseFloat(document.getElementById('pumpendruck').value) || 0.5;
+    CONSTANTS.HYDRAULIK.PUMPENDRUCK = pumpendruckBar * 100000; // Convert bar to Pascal
+    
     // Get current valve settings
     const kv1 = CONSTANTS.HYDRAULIK.KV[parseInt(document.getElementById('ogl').value) - 1];
     const kv2 = CONSTANTS.HYDRAULIK.KV[parseInt(document.getElementById('ogr').value) - 1];
@@ -363,6 +402,8 @@ const calculateVolumenstroeme = () => {
         iter++;
     }
 
+    debug.log(`Flow rates calculated after ${iter} iterations`);
+    debug.log(`Results: ${v.map(x => (x * 3600 * 1000).toFixed(1) + ' l/h').join(', ')}`);
     return v;
 };
 
@@ -400,25 +441,22 @@ const app = () => {
     appContainer.innerHTML = appTemplate;
 
     setTimeout(() => {
+        debug.init();
         plotHeizkurve();
         updateTabelle();
-        // Event Listener für das Up-Down Feld (Vorlauftemperatur)
-        const input = document.getElementById('auslegung-vorlauf');
-        if (input) {
-            input.addEventListener('input', () => {
-                plotHeizkurve();
-                updateTabelle();
-            });
-        }
-        // Event Listener für Außentemperatur
-        const aussentempInput = document.getElementById('aussentemp');
-        if (aussentempInput) {
-            aussentempInput.addEventListener('input', () => {
-                plotHeizkurve();
-                updateTabelle();
-            });
-        }
-        // Add event listeners for valve settings
+        
+        // Event listeners for controls
+        ['auslegung-vorlauf', 'aussentemp', 'pumpendruck'].forEach(id => {
+            const input = document.getElementById(id);
+            if (input) {
+                input.addEventListener('input', () => {
+                    plotHeizkurve();
+                    updateTabelle();
+                });
+            }
+        });
+
+        // Valve event listeners
         const valveInputs = ['ogl', 'ogr', 'egl', 'egr'];
         valveInputs.forEach(id => {
             const input = document.getElementById(id);

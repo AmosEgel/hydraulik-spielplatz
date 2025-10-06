@@ -6,36 +6,51 @@ export const appTemplate = `
                 <object type="image/svg+xml" data="schematic.svg" width="1200" height="840" style="display:block;"></object>
                 <!-- Raum-Labels oben rechts in jedem Raum -->
                 <div style="position:absolute; left:350px; top:210px; width:120px; text-align:right; font-weight:bold; color:#333; pointer-events:none;">
-                    Raum 1 HT=50W/K T=20°C
+                    Raum 1
                 </div>
                 <div style="position:absolute; left:750px; top:210px; width:120px; text-align:right; font-weight:bold; color:#333; pointer-events:none;">
-                    Raum 2 HT=50W/K T=20°C
+                    Raum 2
                 </div>
                 <div style="position:absolute; left:350px; top:410px; width:120px; text-align:right; font-weight:bold; color:#333; pointer-events:none;">
-                    Raum 3 HT=70W/K T=20°C
+                    Raum 3
                 </div>
                 <div style="position:absolute; left:750px; top:410px; width:120px; text-align:right; font-weight:bold; color:#333; pointer-events:none;">
-                    Raum 4 HT=50W/K T=20°C
+                    Raum 4
                 </div>
                 <!-- OG links Heizkörper -->
                 <div style="position:absolute; left:220px; top:270px; width:160px; height:60px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;">
                     <label for="ogl" style="font-size:0.95em;">Ventil-Voreinstellung</label>
-                    <input id="ogl" type="number" min="1" max="6" step="1" value="3" style="width:60px; font-size:1.2em;">
+                    <input id="ogl" type="number" min="1" max="9" step="1" value="7" style="width:60px; font-size:1.2em;">
                 </div>
                 <!-- OG rechts Heizkörper -->
                 <div style="position:absolute; left:620px; top:270px; width:160px; height:60px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;">
                     <label for="ogr" style="font-size:0.95em;">Ventil-Voreinstellung</label>
-                    <input id="ogr" type="number" min="1" max="6" step="1" value="3" style="width:60px; font-size:1.2em;">
+                    <input id="ogr" type="number" min="1" max="9" step="1" value="7" style="width:60px; font-size:1.2em;">
                 </div>
                 <!-- EG links Heizkörper -->
                 <div style="position:absolute; left:220px; top:470px; width:160px; height:60px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;">
                     <label for="egl" style="font-size:0.95em;">Ventil-Voreinstellung</label>
-                    <input id="egl" type="number" min="1" max="6" step="1" value="3" style="width:60px; font-size:1.2em;">
+                    <input id="egl" type="number" min="1" max="9" step="1" value="7" style="width:60px; font-size:1.2em;">
                 </div>
                 <!-- EG rechts Heizkörper -->
                 <div style="position:absolute; left:620px; top:470px; width:160px; height:60px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;">
                     <label for="egr" style="font-size:0.95em;">Ventil-Voreinstellung</label>
-                    <input id="egr" type="number" min="1" max="6" step="1" value="3" style="width:60px; font-size:1.2em;">
+                    <input id="egr" type="number" min="1" max="9" step="1" value="7" style="width:60px; font-size:1.2em;">
+                </div>
+                <!-- Pumpendruck Control im Keller -->
+                <div style="position:absolute; left:250px; top:640px; width:160px; height:60px; display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-start;">
+                    <label for="pumpendruck" style="font-size:0.95em;">Umwälzpumpe (bar)</label>
+                    <input id="pumpendruck" type="number" min="0.1" max="1.0" step="0.1" value="0.5" style="width:60px; font-size:1.2em;">
+                </div>
+                <!-- Vorlauftemperatur Control im Keller -->
+                <div style="position:absolute; left:250px; top:690px; width:220px; height:60px; display:flex; flex-direction:column; align-items:flex-start; justify-content:flex-start;">
+                    <label for="auslegung-vorlauf" style="font-size:0.95em;">Auslegungs-Vorlauftemperatur</label>
+                    <input id="auslegung-vorlauf" type="number" min="20" max="70" step="1" value="60" style="width:60px; font-size:1.2em;">
+                </div>
+                <!-- Außentemperatur Control am Dach -->
+                <div style="position:absolute; left:720px; top:50px; width:160px; height:60px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start;">
+                    <label for="aussentemp" style="font-size:0.95em;">Außentemperatur</label>
+                    <input id="aussentemp" type="number" min="-10" max="20" step="1" value="0" style="width:60px; font-size:1.2em;">
                 </div>
             </div>
             <!-- Heizkurven-Plot und Tabelle -->
@@ -86,19 +101,8 @@ export const appTemplate = `
                     <!-- Textlabel für Vorlauftemperatur am Marker -->
                     <text id="heizkurve-label" x="0" y="0" font-size="16" fill="#b00" stroke="#fff" stroke-width="0.5" style="display:none;"/>
                 </svg>                
-                <!-- VL Up-Down -->
-                <div style="margin-top:1.5em;">
-                    <label for="auslegung-vorlauf" style="font-size:1em;">Auslegungs-Vorlauftemperatur</label><br>
-                    <input id="auslegung-vorlauf" type="number" min="20" max="70" step="1" value="60" style="width:70px; font-size:1.2em;">
-                </div>
-                <!-- Außentemperatur Up-Down -->
-                <div style="margin-top:2em;">
-                    <label for="aussentemp" style="font-size:1em;">Außentemperatur</label><br>
-                    <input id="aussentemp" type="number" min="-10" max="20" step="1" value="0" style="width:70px; font-size:1.2em;">
-                </div>
                 <!-- Tabelle 1: Raumdaten -->
                 <div style="margin-top:1em;">
-                    <h3>Tabelle 1: Raumdaten</h3>
                     <table style="border-collapse:collapse; min-width:400px; text-align:center;">
                         <thead>
                             <tr>
@@ -170,5 +174,9 @@ export const appTemplate = `
                     </table>
                 </div>
             </div>
+        </div>
+        <div id="debug-window" style="position: fixed; bottom: 10px; right: 10px; width: 300px; height: 200px; 
+         background: rgba(0,0,0,0.8); color: #00ff00; font-family: monospace; padding: 10px; 
+         overflow-y: auto; font-size: 12px; display: none;">
         </div>
 `;
